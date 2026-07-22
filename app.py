@@ -98,60 +98,85 @@ class SflixExtractor:
 
     @staticmethod
     def parse_page_url(page_url: str):
-        parsed     = urlparse(page_url)
-        qs         = parse_qs(parsed.query)
-        subject_id = qs.get("id", [None])[0]
+        """
+        Extract subject_id and detail_path from a full sflix URL.
+        Supports both:
+          - with query:    .../movies/lucifer-UQASHYbVPB2?id=219...&type=...
+          - without query: .../movies/lucifer-UQASHYbVPB2
+        Returns (subject_id_or_None, detail_path).
+        """
+        parsed      = urlparse(page_url)
+        qs          = parse_qs(parsed.query)
+        subject_id  = qs.get("id", [None])[0]
         detail_path = [s for s in parsed.path.split("/") if s][-1]
         return subject_id, detail_path
 
-    def get_detail(self, detail_path: str, referer_detail_path: str = None):
+    def get_detail(self, detail_path: str, subject_id: str = None,
+                   referer_detail_path: str = None):
+        """
+        Fetch /detail for detail_path.
+        If subject_id is provided, constructs the proper Referer URL with ?id=...
+        Sets self._token from the response.
+        """
         ref_slug = referer_detail_path or detail_path
+        # Build proper Referer including subject_id if available
+        if subject_id:
+            referer = (
+                f"{SITE}/spa/videoPlayPage/movies/{ref_slug}"
+                f"?id={subject_id}&type=/movie/detail&lang=en"
+            )
+        else:
+            referer = f"{SITE}/spa/videoPlayPage/movies/{ref_slug}"
+
         try:
             r = self.session.get(
                 f"{H5_API}/wefeed-h5api-bff/detail",
                 params={"detailPath": detail_path},
                 headers={
                     "Origin":  SITE,
-                    "Referer": f"{SITE}/spa/videoPlayPage/movies/{ref_slug}",
+                    "Referer": referer,
                 },
                 timeout=20,
             )
             r.raise_for_status()
             body = r.json()
         except Exception as e:
-            print(f"[get_detail] request/parse failed: {e}")
+            print(f"[get_detail] request/parse failed for '{detail_path}': {e}")
             return None
+
         if body.get("code") != 0:
-            print(f"[get_detail] non-zero code: {body.get('code')} msg={body.get('msg')}")
+            print(f"[get_detail] non-zero code={body.get('code')} msg={body.get('msg')}")
             return None
-        # Token may come as a cookie OR inside the response body data
+
+        # Token may live in cookies OR in the response body
         self._token = (
             self.session.cookies.get("token")
             or (body.get("data") or {}).get("token")
             or body.get("token")
         )
-        if not self._token:
-            print("[get_detail] no token found in cookies or body")
-            # Don't hard-fail — some endpoints don't require a token
+        print(f"[get_detail] ok, token={'yes' if self._token else 'NO'}")
         return body["data"]
 
     def _play_request(self, subject_id: str, detail_path: str, se: int, ep: int):
-        # Build auth headers; omit if no token (let server decide)
-        extra_headers: dict = {
-            "Origin":  SITE,
-            "Referer": (
-                f"{SITE}/spa/videoPlayPage/movies/{detail_path}"
-                f"?id={subject_id}&type=/movie/detail&lang=en"
-            ),
+        """
+        Call H5_API /subject/play with proper auth headers and Referer.
+        """
+        referer = (
+            f"{SITE}/spa/videoPlayPage/movies/{detail_path}"
+            f"?id={subject_id}&type=/movie/detail&lang=en"
+        )
+        headers = {
+            "Origin":   SITE,
+            "Referer":  referer,
             "x-source": "",
         }
         if self._token:
             mb_token_val = urllib.parse.quote(f'"{self._token}"')
-            extra_headers["Authorization"] = f"Bearer {self._token}"
-            extra_headers["Cookie"]        = f"mb_token={mb_token_val}"
+            headers["Authorization"] = f"Bearer {self._token}"
+            headers["Cookie"]        = f"mb_token={mb_token_val}"
 
         try:
-            # BUG FIX: play endpoint lives on H5_API, not SITE
+            # FIX: play endpoint is on H5_API, not SITE
             r = self.session.get(
                 f"{H5_API}/wefeed-h5api-bff/subject/play",
                 params={
@@ -161,7 +186,7 @@ class SflixExtractor:
                     "detailPath":     detail_path,
                     "streamSignType": 1,
                 },
-                headers=extra_headers,
+                headers=headers,
                 timeout=20,
             )
             r.raise_for_status()
@@ -171,22 +196,21 @@ class SflixExtractor:
             return None
 
         if body.get("code") != 0:
-            print(f"[_play_request] non-zero code: {body.get('code')} msg={body.get('msg')}")
+            print(f"[_play_request] code={body.get('code')} msg={body.get('msg')}")
             return None
+
         data = body.get("data") or {}
         has_streams = (
             len(data.get("streams") or []) > 0
             or len(data.get("dash")    or []) > 0
             or len(data.get("hls")     or []) > 0
         )
+        print(f"[_play_request] has_streams={has_streams}")
         return data if has_streams else None
 
     def get_streams(self, subject_id: str, detail_path: str,
                     season: int = 1, episode: int = 1,
                     force_movie: bool | None = None):
-        if not self._token:
-            return None, None
-
         if force_movie is True:
             data = self._play_request(subject_id, detail_path, 0, 0)
             return (data, True) if data else (None, None)
@@ -195,7 +219,7 @@ class SflixExtractor:
             data = self._play_request(subject_id, detail_path, season, episode)
             return (data, False) if data else (None, None)
 
-        # Auto-detect
+        # Auto-detect: try movie (se=0,ep=0) first, then series
         data = self._play_request(subject_id, detail_path, 0, 0)
         if data:
             return data, True
@@ -216,9 +240,14 @@ class SflixExtractor:
                 return d
         return None
 
-    def _setup(self, page_url: str, prefer_lang: str | None, lang_chain: list | None):
-        subject_id, detail_path = self.parse_page_url(page_url)
-        detail = self.get_detail(detail_path)
+    def _setup(self, subject_id: str, detail_path: str,
+               prefer_lang: str | None, lang_chain: list | None):
+        """
+        Given subject_id + detail_path (from catalog or parsed URL),
+        fetch detail and resolve language variant.
+        Returns (subject_id, detail_path, detail) or (None, None, None) on failure.
+        """
+        detail = self.get_detail(detail_path, subject_id=subject_id)
         if not detail:
             return None, None, None
 
@@ -234,7 +263,8 @@ class SflixExtractor:
             old_path    = detail_path
             subject_id  = match["subjectId"]
             detail_path = match["detailPath"]
-            detail = self.get_detail(detail_path, referer_detail_path=old_path)
+            detail = self.get_detail(detail_path, subject_id=subject_id,
+                                     referer_detail_path=old_path)
             if not detail:
                 return None, None, None
 
@@ -253,15 +283,15 @@ class SflixExtractor:
         match = next((s for s in pool if str(s.get("resolutions")) == str(prefer_quality)), None)
         return match or max(pool, key=lambda s: int(s.get("resolutions", 0) or 0))
 
-    def extract_single(self, page_url: str,
+    def extract_single(self, subject_id: str, detail_path: str,
                        season: int = 1,
                        episode: int = 1,
                        prefer_lang: str | None = None,
                        prefer_quality: str = "best",
                        force_movie: bool | None = None) -> dict:
-        subject_id, detail_path, detail = self._setup(page_url, prefer_lang, None)
+        subject_id, detail_path, detail = self._setup(subject_id, detail_path, prefer_lang, None)
         if subject_id is None:
-            return {"error": "detail fetch failed or no token"}
+            return {"error": "detail fetch failed — check subject_id/detail_path"}
 
         play, is_movie = self.get_streams(
             subject_id, detail_path,
@@ -362,30 +392,6 @@ class SflixExtractor:
 # ─────────────────────────────────────────────
 app = Flask(__name__)
 CORS(app)
-
-
-# Global error handlers — ensure all errors return JSON, never HTML
-@app.errorhandler(400)
-def bad_request(e):
-    return jsonify({"error": "bad request", "detail": str(e)}), 400
-
-@app.errorhandler(404)
-def not_found(e):
-    return jsonify({"error": "not found"}), 404
-
-@app.errorhandler(405)
-def method_not_allowed(e):
-    return jsonify({"error": "method not allowed"}), 405
-
-@app.errorhandler(500)
-def internal_error(e):
-    return jsonify({"error": "internal server error", "detail": str(e)}), 500
-
-@app.errorhandler(Exception)
-def unhandled(e):
-    import traceback
-    traceback.print_exc()
-    return jsonify({"error": "unexpected error", "detail": str(e)}), 500
 
 
 def _err(msg: str, code: int = 400):
