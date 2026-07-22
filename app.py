@@ -106,53 +106,74 @@ class SflixExtractor:
 
     def get_detail(self, detail_path: str, referer_detail_path: str = None):
         ref_slug = referer_detail_path or detail_path
-        r = self.session.get(
-            f"{H5_API}/wefeed-h5api-bff/detail",
-            params={"detailPath": detail_path},
-            headers={
-                "Origin":  SITE,
-                "Referer": f"{SITE}/spa/videoPlayPage/movies/{ref_slug}",
-            },
-            timeout=20,
-        )
-        r.raise_for_status()
-        body = r.json()
+        try:
+            r = self.session.get(
+                f"{H5_API}/wefeed-h5api-bff/detail",
+                params={"detailPath": detail_path},
+                headers={
+                    "Origin":  SITE,
+                    "Referer": f"{SITE}/spa/videoPlayPage/movies/{ref_slug}",
+                },
+                timeout=20,
+            )
+            r.raise_for_status()
+            body = r.json()
+        except Exception as e:
+            print(f"[get_detail] request/parse failed: {e}")
+            return None
         if body.get("code") != 0:
+            print(f"[get_detail] non-zero code: {body.get('code')} msg={body.get('msg')}")
             return None
-        self._token = self.session.cookies.get("token")
+        # Token may come as a cookie OR inside the response body data
+        self._token = (
+            self.session.cookies.get("token")
+            or (body.get("data") or {}).get("token")
+            or body.get("token")
+        )
         if not self._token:
-            return None
+            print("[get_detail] no token found in cookies or body")
+            # Don't hard-fail — some endpoints don't require a token
         return body["data"]
 
     def _play_request(self, subject_id: str, detail_path: str, se: int, ep: int):
-        if not self._token:
+        # Build auth headers; omit if no token (let server decide)
+        extra_headers: dict = {
+            "Origin":  SITE,
+            "Referer": (
+                f"{SITE}/spa/videoPlayPage/movies/{detail_path}"
+                f"?id={subject_id}&type=/movie/detail&lang=en"
+            ),
+            "x-source": "",
+        }
+        if self._token:
+            mb_token_val = urllib.parse.quote(f'"{self._token}"')
+            extra_headers["Authorization"] = f"Bearer {self._token}"
+            extra_headers["Cookie"]        = f"mb_token={mb_token_val}"
+
+        try:
+            # BUG FIX: play endpoint lives on H5_API, not SITE
+            r = self.session.get(
+                f"{H5_API}/wefeed-h5api-bff/subject/play",
+                params={
+                    "subjectId":      subject_id,
+                    "se":             se,
+                    "ep":             ep,
+                    "detailPath":     detail_path,
+                    "streamSignType": 1,
+                },
+                headers=extra_headers,
+                timeout=20,
+            )
+            r.raise_for_status()
+            body = r.json()
+        except Exception as e:
+            print(f"[_play_request] request/parse failed sid={subject_id} se={se} ep={ep}: {e}")
             return None
-        mb_token_val = urllib.parse.quote(f'"{self._token}"')
-        r = self.session.get(
-            f"{SITE}/wefeed-h5api-bff/subject/play",
-            params={
-                "subjectId":      subject_id,
-                "se":             se,
-                "ep":             ep,
-                "detailPath":     detail_path,
-                "streamSignType": 1,
-            },
-            headers={
-                "Authorization": f"Bearer {self._token}",
-                "Cookie":        f"mb_token={mb_token_val}",
-                "Origin":        SITE,
-                "Referer": (
-                    f"{SITE}/spa/videoPlayPage/movies/{detail_path}"
-                    f"?id={subject_id}&type=/movie/detail&lang=en"
-                ),
-                "x-source": "",
-            },
-            timeout=20,
-        )
-        body = r.json()
+
         if body.get("code") != 0:
+            print(f"[_play_request] non-zero code: {body.get('code')} msg={body.get('msg')}")
             return None
-        data = body["data"]
+        data = body.get("data") or {}
         has_streams = (
             len(data.get("streams") or []) > 0
             or len(data.get("dash")    or []) > 0
@@ -341,6 +362,30 @@ class SflixExtractor:
 # ─────────────────────────────────────────────
 app = Flask(__name__)
 CORS(app)
+
+
+# Global error handlers — ensure all errors return JSON, never HTML
+@app.errorhandler(400)
+def bad_request(e):
+    return jsonify({"error": "bad request", "detail": str(e)}), 400
+
+@app.errorhandler(404)
+def not_found(e):
+    return jsonify({"error": "not found"}), 404
+
+@app.errorhandler(405)
+def method_not_allowed(e):
+    return jsonify({"error": "method not allowed"}), 405
+
+@app.errorhandler(500)
+def internal_error(e):
+    return jsonify({"error": "internal server error", "detail": str(e)}), 500
+
+@app.errorhandler(Exception)
+def unhandled(e):
+    import traceback
+    traceback.print_exc()
+    return jsonify({"error": "unexpected error", "detail": str(e)}), 500
 
 
 def _err(msg: str, code: int = 400):
