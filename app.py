@@ -513,9 +513,628 @@ def dubs():
     })
 
 
-# ── GET / — API docs ─────────────────────────
+# ── GET / — Web UI ───────────────────────────
 @app.get("/")
 def index():
+    html = r"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SFlix Stream Extractor</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=DM+Mono:wght@400;500&display=swap');
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg:        #0c0d10;
+    --surface:   #13151b;
+    --border:    #1f2230;
+    --accent:    #e8b84b;
+    --accent-dim:#7a5e1a;
+    --text:      #dde1ec;
+    --muted:     #5a6072;
+    --green:     #3ecf6a;
+    --red:       #e05c5c;
+    --blue:      #5b9cf6;
+    --radius:    10px;
+  }
+
+  html { font-size: 15px; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'DM Sans', system-ui, sans-serif;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 40px 16px 80px;
+  }
+
+  /* ── Header ── */
+  header {
+    text-align: center;
+    margin-bottom: 40px;
+  }
+  .logo {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 10px;
+  }
+  .logo svg { width: 32px; height: 32px; }
+  .logo-text {
+    font-size: 1.55rem;
+    font-weight: 600;
+    letter-spacing: -0.5px;
+    color: #fff;
+  }
+  .logo-text span { color: var(--accent); }
+  header p {
+    color: var(--muted);
+    font-size: 0.88rem;
+    letter-spacing: 0.02em;
+  }
+
+  /* ── Card ── */
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 28px;
+    width: 100%;
+    max-width: 620px;
+    margin-bottom: 20px;
+  }
+  .card-title {
+    font-size: 0.72rem;
+    font-weight: 500;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 18px;
+  }
+
+  /* ── Form controls ── */
+  .row { display: flex; gap: 10px; flex-wrap: wrap; }
+  .field { display: flex; flex-direction: column; gap: 6px; flex: 1; min-width: 140px; }
+  .field label { font-size: 0.8rem; color: var(--muted); font-weight: 500; }
+  input, select {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    font-family: inherit;
+    font-size: 0.9rem;
+    padding: 9px 12px;
+    outline: none;
+    transition: border-color 0.15s;
+    width: 100%;
+  }
+  input:focus, select:focus { border-color: var(--accent); }
+  input::placeholder { color: var(--muted); }
+  select option { background: var(--surface); }
+
+  /* type toggle */
+  .toggle-row {
+    display: flex;
+    gap: 0;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    overflow: hidden;
+  }
+  .toggle-row label {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 8px;
+    cursor: pointer;
+    font-size: 0.85rem;
+    color: var(--muted);
+    transition: background 0.15s, color 0.15s;
+    user-select: none;
+  }
+  .toggle-row input[type=radio] { display: none; }
+  .toggle-row input[type=radio]:checked + span { color: var(--accent); }
+  .toggle-row label:has(input:checked) {
+    background: #1a1c25;
+    color: var(--accent);
+  }
+
+  /* series fields */
+  #series-fields {
+    display: none;
+    margin-top: 12px;
+  }
+  #series-fields.visible { display: flex; }
+
+  /* submit */
+  .btn {
+    width: 100%;
+    padding: 12px;
+    margin-top: 18px;
+    background: var(--accent);
+    color: #0c0d10;
+    border: none;
+    border-radius: 6px;
+    font-family: inherit;
+    font-size: 0.95rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: opacity 0.15s, transform 0.1s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+  }
+  .btn:hover:not(:disabled) { opacity: 0.9; transform: translateY(-1px); }
+  .btn:disabled { opacity: 0.45; cursor: not-allowed; transform: none; }
+
+  /* ── Spinner ── */
+  .spinner {
+    width: 18px; height: 18px;
+    border: 2px solid rgba(0,0,0,0.3);
+    border-top-color: #0c0d10;
+    border-radius: 50%;
+    animation: spin 0.7s linear infinite;
+    display: none;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* ── Results ── */
+  #results { width: 100%; max-width: 620px; display: none; }
+
+  .meta-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 16px;
+    margin-bottom: 20px;
+  }
+  .poster {
+    width: 72px;
+    height: 104px;
+    object-fit: cover;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    flex-shrink: 0;
+    background: var(--border);
+  }
+  .meta-info { flex: 1; min-width: 0; }
+  .meta-title { font-size: 1.15rem; font-weight: 600; margin-bottom: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .meta-badges { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+  .badge {
+    font-size: 0.72rem;
+    padding: 3px 8px;
+    border-radius: 4px;
+    background: var(--border);
+    color: var(--muted);
+    font-family: 'DM Mono', monospace;
+  }
+  .badge.green { background: rgba(62,207,106,0.12); color: var(--green); }
+  .badge.gold  { background: rgba(232,184,75,0.12);  color: var(--accent); }
+  .badge.blue  { background: rgba(91,156,246,0.12);  color: var(--blue); }
+
+  /* best stream highlight */
+  .best-stream {
+    background: linear-gradient(135deg, rgba(232,184,75,0.08) 0%, rgba(232,184,75,0.02) 100%);
+    border: 1px solid var(--accent-dim);
+    border-radius: var(--radius);
+    padding: 16px 18px;
+    margin-bottom: 14px;
+  }
+  .best-label {
+    font-size: 0.7rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--accent);
+    font-weight: 500;
+    margin-bottom: 8px;
+  }
+  .best-res { font-size: 1.5rem; font-weight: 600; color: #fff; margin-bottom: 8px; }
+  .stream-url {
+    font-family: 'DM Mono', monospace;
+    font-size: 0.75rem;
+    color: var(--muted);
+    word-break: break-all;
+    margin-bottom: 10px;
+  }
+  .copy-btn {
+    background: var(--accent);
+    color: #0c0d10;
+    border: none;
+    border-radius: 5px;
+    font-family: inherit;
+    font-size: 0.8rem;
+    font-weight: 600;
+    padding: 7px 14px;
+    cursor: pointer;
+    transition: opacity 0.15s;
+    margin-right: 8px;
+  }
+  .copy-btn:hover { opacity: 0.85; }
+  .open-btn {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: 5px;
+    font-family: inherit;
+    font-size: 0.8rem;
+    padding: 7px 14px;
+    cursor: pointer;
+    transition: border-color 0.15s;
+    text-decoration: none;
+    display: inline-block;
+  }
+  .open-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+  /* stream list */
+  .streams-section { margin-top: 16px; }
+  .streams-label {
+    font-size: 0.72rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--muted);
+    font-weight: 500;
+    margin-bottom: 10px;
+  }
+  .stream-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 14px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    margin-bottom: 7px;
+    transition: border-color 0.15s;
+  }
+  .stream-item:hover { border-color: var(--accent-dim); }
+  .stream-res {
+    font-family: 'DM Mono', monospace;
+    font-size: 0.85rem;
+    font-weight: 500;
+    color: var(--text);
+    min-width: 50px;
+  }
+  .stream-codec {
+    font-size: 0.75rem;
+    color: var(--muted);
+    flex: 1;
+  }
+  .stream-actions { display: flex; gap: 6px; }
+  .icon-btn {
+    background: var(--border);
+    border: none;
+    border-radius: 4px;
+    color: var(--muted);
+    cursor: pointer;
+    padding: 5px 8px;
+    font-size: 0.75rem;
+    transition: background 0.15s, color 0.15s;
+  }
+  .icon-btn:hover { background: var(--accent); color: #0c0d10; }
+  .vip-tag {
+    font-size: 0.68rem;
+    padding: 2px 6px;
+    background: rgba(224,92,92,0.12);
+    color: var(--red);
+    border-radius: 3px;
+  }
+
+  /* error */
+  .error-box {
+    border: 1px solid rgba(224,92,92,0.3);
+    background: rgba(224,92,92,0.07);
+    border-radius: var(--radius);
+    padding: 16px;
+    color: var(--red);
+    font-size: 0.88rem;
+  }
+
+  /* divider */
+  hr { border: none; border-top: 1px solid var(--border); margin: 18px 0; }
+
+  /* toast */
+  .toast {
+    position: fixed;
+    bottom: 24px;
+    right: 24px;
+    background: var(--green);
+    color: #0c0d10;
+    padding: 10px 18px;
+    border-radius: 6px;
+    font-size: 0.85rem;
+    font-weight: 600;
+    opacity: 0;
+    transform: translateY(8px);
+    transition: opacity 0.2s, transform 0.2s;
+    pointer-events: none;
+    z-index: 999;
+  }
+  .toast.show { opacity: 1; transform: translateY(0); }
+
+  @media (max-width: 480px) {
+    .meta-row { flex-direction: column; }
+    .poster { width: 100%; height: 160px; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">
+    <svg viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <rect width="32" height="32" rx="8" fill="#e8b84b"/>
+      <path d="M8 10.5C8 9.67 8.67 9 9.5 9h4L11 14h3.5L10 23l10-11h-4.5L18 7H9.5C8.67 7 8 7.67 8 8.5v22" fill="none"/>
+      <polygon points="10,23 20,12 15.5,12 18,7 9.5,7 9.5,9 13.5,9 11,14 14.5,14" fill="#0c0d10"/>
+    </svg>
+    <span class="logo-text">S<span>Flix</span> Extractor</span>
+  </div>
+  <p>Resolve IMDB / TMDB IDs to direct stream URLs</p>
+</header>
+
+<!-- Search card -->
+<div class="card">
+  <div class="card-title">Find streams</div>
+
+  <div class="field" style="margin-bottom:14px">
+    <label for="id-input">IMDB ID or TMDB ID</label>
+    <input id="id-input" type="text" placeholder="e.g. tt4052886 or 63174" autocomplete="off" spellcheck="false">
+  </div>
+
+  <div class="field" style="margin-bottom:14px">
+    <label>Content type</label>
+    <div class="toggle-row">
+      <label><input type="radio" name="ctype" value="auto" checked><span>Auto-detect</span></label>
+      <label><input type="radio" name="ctype" value="movie"><span>Movie</span></label>
+      <label><input type="radio" name="ctype" value="series"><span>Series</span></label>
+    </div>
+  </div>
+
+  <div class="row" id="series-fields">
+    <div class="field">
+      <label for="season-input">Season</label>
+      <input id="season-input" type="number" min="1" value="1">
+    </div>
+    <div class="field">
+      <label for="episode-input">Episode</label>
+      <input id="episode-input" type="number" min="1" value="1">
+    </div>
+  </div>
+
+  <div class="row" style="margin-top:14px">
+    <div class="field">
+      <label for="quality-select">Quality</label>
+      <select id="quality-select">
+        <option value="best">Best available</option>
+        <option value="1080">1080p</option>
+        <option value="720">720p</option>
+        <option value="480">480p</option>
+        <option value="lowest">Lowest</option>
+      </select>
+    </div>
+    <div class="field">
+      <label for="lang-input">Language (optional)</label>
+      <input id="lang-input" type="text" placeholder="e.g. en, hi, bn">
+    </div>
+  </div>
+
+  <button class="btn" id="extract-btn" onclick="doExtract()">
+    <span id="btn-text">Extract Streams</span>
+    <div class="spinner" id="btn-spinner"></div>
+  </button>
+</div>
+
+<!-- Results -->
+<div id="results">
+  <div class="card" id="result-card"></div>
+</div>
+
+<div class="toast" id="toast">Copied!</div>
+
+<script>
+  // Toggle series fields
+  document.querySelectorAll('input[name=ctype]').forEach(r => {
+    r.addEventListener('change', () => {
+      const sf = document.getElementById('series-fields');
+      sf.classList.toggle('visible', r.value === 'series');
+    });
+  });
+
+  // Enter key submits
+  document.getElementById('id-input').addEventListener('keydown', e => {
+    if (e.key === 'Enter') doExtract();
+  });
+
+  function setLoading(on) {
+    const btn = document.getElementById('extract-btn');
+    const txt = document.getElementById('btn-text');
+    const spin = document.getElementById('btn-spinner');
+    btn.disabled = on;
+    txt.textContent = on ? 'Extracting…' : 'Extract Streams';
+    spin.style.display = on ? 'block' : 'none';
+  }
+
+  async function doExtract() {
+    const id = document.getElementById('id-input').value.trim();
+    if (!id) {
+      document.getElementById('id-input').focus();
+      return;
+    }
+
+    const ctype = document.querySelector('input[name=ctype]:checked').value;
+    const quality = document.getElementById('quality-select').value;
+    const lang = document.getElementById('lang-input').value.trim();
+    const season = parseInt(document.getElementById('season-input').value) || 1;
+    const episode = parseInt(document.getElementById('episode-input').value) || 1;
+
+    const body = { id, quality };
+    if (lang) body.prefer_lang = lang;
+    if (ctype === 'movie')  body.force_movie = true;
+    if (ctype === 'series') { body.force_movie = false; body.season = season; body.episode = episode; }
+    if (ctype === 'auto' && document.getElementById('series-fields').classList.contains('visible')) {
+      body.season = season; body.episode = episode;
+    }
+
+    setLoading(true);
+    const resultsEl = document.getElementById('results');
+    resultsEl.style.display = 'none';
+
+    try {
+      const resp = await fetch('/extract', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const data = await resp.json();
+      renderResult(data, resp.ok);
+    } catch(e) {
+      renderError('Network error: ' + e.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function renderResult(data, ok) {
+    const card = document.getElementById('result-card');
+    const results = document.getElementById('results');
+
+    if (!ok || data.error) {
+      card.innerHTML = `<div class="error-box">
+        <strong>Error:</strong> ${escHtml(data.error || 'Unknown error')}
+      </div>`;
+      results.style.display = 'block';
+      return;
+    }
+
+    const cat = data.catalog || {};
+    const isMovie = data.is_movie;
+    const mp4 = data.mp4 || [];
+    const best = data.best_mp4;
+
+    let html = '';
+
+    // Meta row
+    if (cat.title || cat.poster) {
+      html += `<div class="meta-row">`;
+      if (cat.poster) {
+        html += `<img class="poster" src="${escHtml(cat.poster)}" alt="poster" onerror="this.style.display='none'">`;
+      }
+      html += `<div class="meta-info">`;
+      if (cat.title) html += `<div class="meta-title">${escHtml(cat.title)}</div>`;
+      html += `<div class="meta-badges">`;
+      html += `<span class="badge ${isMovie ? 'blue' : 'green'}">${isMovie ? 'Movie' : 'Series'}</span>`;
+      if (!isMovie && data.season != null) html += `<span class="badge">S${data.season} E${data.episode}</span>`;
+      if (cat.imdb_rating) html += `<span class="badge gold">★ ${escHtml(cat.imdb_rating)}</span>`;
+      if (cat.imdb_id)  html += `<span class="badge">${escHtml(cat.imdb_id)}</span>`;
+      if (cat.genre) {
+        cat.genre.split(',').slice(0,3).forEach(g => {
+          html += `<span class="badge">${escHtml(g.trim())}</span>`;
+        });
+      }
+      html += `</div></div></div>`;
+    }
+
+    // Best stream
+    if (best) {
+      html += `<div class="best-stream">
+        <div class="best-label">Best stream</div>
+        <div class="best-res">${best.resolution ? best.resolution + 'p' : 'Unknown'}</div>
+        <div class="stream-url">${escHtml(best.url)}</div>
+        <button class="copy-btn" onclick="copyUrl('${escAttr(best.url)}', this)">Copy URL</button>
+        <a class="open-btn" href="${escHtml(best.url)}" target="_blank" rel="noopener">Open link ↗</a>
+      </div>`;
+    } else {
+      html += `<div class="error-box">No streams found for this title.</div>`;
+    }
+
+    // All mp4 streams
+    if (mp4.length > 1) {
+      html += `<div class="streams-section">
+        <div class="streams-label">All MP4 streams (${mp4.length})</div>`;
+      mp4.forEach(s => {
+        html += `<div class="stream-item">
+          <span class="stream-res">${s.resolution ? s.resolution + 'p' : '—'}</span>
+          <span class="stream-codec">${escHtml(s.codec || 'mp4')}</span>
+          ${s.vip_locked ? '<span class="vip-tag">VIP</span>' : ''}
+          <div class="stream-actions">
+            <button class="icon-btn" onclick="copyUrl('${escAttr(s.url)}', this)" title="Copy URL">⎘ Copy</button>
+            <a class="icon-btn" href="${escHtml(s.url)}" target="_blank" rel="noopener" title="Open">↗</a>
+          </div>
+        </div>`;
+      });
+      html += `</div>`;
+    }
+
+    // HLS / DASH
+    if ((data.hls || []).length > 0) {
+      html += `<hr><div class="streams-section"><div class="streams-label">HLS streams</div>`;
+      (data.hls || []).forEach(s => {
+        html += `<div class="stream-item">
+          <span class="stream-res">${s.resolution ? s.resolution + 'p' : 'HLS'}</span>
+          <span class="stream-codec">m3u8</span>
+          <div class="stream-actions">
+            <button class="icon-btn" onclick="copyUrl('${escAttr(s.url)}', this)">⎘ Copy</button>
+            <a class="icon-btn" href="${escHtml(s.url)}" target="_blank" rel="noopener">↗</a>
+          </div>
+        </div>`;
+      });
+      html += `</div>`;
+    }
+
+    if ((data.dash || []).length > 0) {
+      html += `<hr><div class="streams-section"><div class="streams-label">DASH streams</div>`;
+      (data.dash || []).forEach(s => {
+        html += `<div class="stream-item">
+          <span class="stream-res">${s.resolution ? s.resolution + 'p' : 'DASH'}</span>
+          <span class="stream-codec">mpd</span>
+          <div class="stream-actions">
+            <button class="icon-btn" onclick="copyUrl('${escAttr(s.url)}', this)">⎘ Copy</button>
+            <a class="icon-btn" href="${escHtml(s.url)}" target="_blank" rel="noopener">↗</a>
+          </div>
+        </div>`;
+      });
+      html += `</div>`;
+    }
+
+    card.innerHTML = html;
+    results.style.display = 'block';
+  }
+
+  function renderError(msg) {
+    const card = document.getElementById('result-card');
+    card.innerHTML = `<div class="error-box"><strong>Error:</strong> ${escHtml(msg)}</div>`;
+    document.getElementById('results').style.display = 'block';
+  }
+
+  function copyUrl(url, el) {
+    navigator.clipboard.writeText(url).then(() => {
+      const t = document.getElementById('toast');
+      t.classList.add('show');
+      setTimeout(() => t.classList.remove('show'), 1800);
+    });
+  }
+
+  function escHtml(s) {
+    return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+  function escAttr(s) {
+    return String(s || '').replace(/'/g, "\\'");
+  }
+</script>
+</body>
+</html>"""
+    from flask import Response
+    return Response(html, mimetype='text/html')
+
+
+# ── GET /api-docs — JSON API documentation ───
+@app.get("/api-docs")
+def api_docs():
     return jsonify({
         "name":    "SFlix Stream Extractor API",
         "version": "1.0.0",
